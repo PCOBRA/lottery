@@ -34,31 +34,74 @@ Citizen.CreateThread(function()
     end
 end)
 
--- Hiển thị menu mua vé số
-function ShowLotteryMenu(jackpot, nextDrawTime)
+-- Hiển thị menu mua vé số (bỏ thời gian quay số)
+function ShowLotteryMenu(jackpot)
+    local options = {
+        {
+            title = "💰 Jackpot: " .. tostring(jackpot or 0) .. "$",
+            icon = "fas fa-coins",
+            disabled = true
+        },
+        {
+            title = "🎟️ Mua Vé Số",
+            description = "Giá vé: 20000$ (Tối đa 2 vé) - Cơ hội trúng lớn đang chờ bạn!",
+            icon = "fas fa-ticket-alt",
+            iconColor = "#FFD700",
+            onSelect = function()
+                TriggerServerEvent('lottery:buyTicket')
+            end
+        },
+        {
+            title = "📜 Xem Lịch Sử Jackpot",
+            icon = "fas fa-history",
+            onSelect = function()
+                TriggerServerEvent('lottery:getJackpotHistory')
+            end
+        }
+    }
     lib.registerContext({
         id = 'lottery_menu',
         title = '🎰 XỔ SỐ - CƠ HỘI TRÚNG LỚN 🎰',
-        options = {
-            {
-                title = "💰 Jackpot: " .. jackpot .. "$",
-                description = "Thời gian quay số tiếp theo: " .. nextDrawTime,
-                icon = "fas fa-coins",
-                disabled = true
-            },
-            {
-                title = "🎟️ Mua Vé Số",
-                description = "Giá vé: 20000$ (Tối đa 2 vé) - Cơ hội trúng lớn đang chờ bạn!",
-                icon = "fas fa-ticket-alt",
-                iconColor = "#FFD700", -- Màu vàng cho icon
-                onSelect = function()
-                    TriggerServerEvent('lottery:buyTicket')
-                end
-            }
-        }
+        options = options
     })
     lib.showContext('lottery_menu')
 end
+
+-- Hiển thị menu lịch sử jackpot (riêng biệt)
+RegisterNetEvent('lottery:receiveJackpotHistory', function(history)
+    local options = {
+        {
+            title = "📜 Lịch Sử Jackpot Gần Nhất",
+            description = "5 kỳ quay số trước",
+            icon = "fas fa-history",
+            disabled = true
+        }
+    }
+
+    if #history > 0 then
+        for i, entry in ipairs(history) do
+            table.insert(options, {
+                title = "Kỳ " .. i .. ": " .. entry.winning_number,
+                description = "Giải: " .. entry.prize_pool .. "$",
+                icon = "fas fa-history"
+            })
+        end
+    else
+        table.insert(options, {
+            title = "Không có dữ liệu lịch sử",
+            description = "Chưa có kỳ quay số nào.",
+            icon = "fas fa-info-circle",
+            disabled = true
+        })
+    end
+
+    lib.registerContext({
+        id = 'lottery_history_menu',
+        title = '📋 LỊCH SỬ JACKPOT',
+        options = options
+    })
+    lib.showContext('lottery_history_menu')
+end)
 
 -- Hiển thị danh sách vé đã mua
 RegisterNetEvent('lottery:showTickets', function(tickets)
@@ -79,10 +122,12 @@ RegisterNetEvent('lottery:showTickets', function(tickets)
 end)
 
 -- Thông báo kết quả quay số
-RegisterNetEvent('lottery:drawResult', function(winningNumber, prize)
+RegisterNetEvent('lottery:drawResult', function(winningNumber, prize, jackpotWinners, secondWinners, thirdWinners, consolationWinners)
     lib.notify({
         title = "Kết quả xổ số",
-        description = "Số trúng thưởng: " .. winningNumber .. ". Giải thưởng: " .. prize .. "$",
+        description = "Số trúng thưởng: " .. winningNumber .. ". Giải thưởng: " .. prize .. "$\n" ..
+                      "Jackpot: " .. jackpotWinners .. " người - Giải nhì: " .. secondWinners .. " người\n" ..
+                      "Giải ba: " .. thirdWinners .. " người - Khuyến khích: " .. consolationWinners .. " người",
         type = "inform",
         position = "center-left",
         duration = Config.NotifyDuration
@@ -90,45 +135,48 @@ RegisterNetEvent('lottery:drawResult', function(winningNumber, prize)
 end)
 
 -- Thông báo trúng thưởng
-RegisterNetEvent('lottery:winPrize', function(amount)
+RegisterNetEvent('lottery:winPrize', function(amount, prizeType)
     lib.notify({
         title = "Chúc mừng!",
-        description = "Bạn đã trúng thưởng " .. amount .. "$ (đã vào ngân hàng sau thuế)!",
+        description = "Bạn đã trúng " .. prizeType .. ": " .. amount .. "$ (đã vào ngân hàng)!",
         type = "success",
         position = "center-left",
         duration = Config.NotifyDuration
     })
 end)
 
--- Thông báo nhắc nhở
+-- Thông báo nhắc nhở (bỏ thời gian)
 RegisterNetEvent('lottery:reminder', function(message)
     lib.notify({
         title = "Xổ số",
-        description = message or "Xổ số sẽ diễn ra trong 10 phút nữa!",
+        description = message or "Xổ số sắp diễn ra!",
         type = "info",
         position = "center-left",
         duration = Config.NotifyDuration
     })
 end)
 
--- Thông báo khóa mua vé
+-- Thông báo khóa mua vé (bỏ thời gian)
 RegisterNetEvent('lottery:buyLocked', function()
     lib.notify({
         title = "Xổ số",
-        description = "Không thể mua vé, còn dưới 10 phút đến giờ quay!",
+        description = "Không thể mua vé, xổ số sắp diễn ra!",
         type = "error",
         position = "center-left",
         duration = Config.NotifyDuration
     })
 end)
 
--- Nhận jackpot và thời gian quay số từ server
-RegisterNetEvent('lottery:receiveJackpot', function(jackpot, nextDrawTime)
-    ShowLotteryMenu(jackpot, nextDrawTime)
+-- Nhận jackpot từ server (bỏ thời gian)
+local totalPool = 0
+RegisterNetEvent('lottery:receiveJackpot', function(jackpot)
+    totalPool = jackpot
+    ShowLotteryMenu(jackpot)
 end)
 
 -- Thông báo Jackpot tăng
 RegisterNetEvent('lottery:jackpotUpdated', function(jackpot)
+    totalPool = jackpot
     lib.notify({
         title = "Xổ số",
         description = "Jackpot đã tăng lên: " .. jackpot .. "$!",
