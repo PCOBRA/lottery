@@ -22,3 +22,11 @@ CREATE TABLE lottery_logs (
     message TEXT NOT NULL,
     date DATETIME NOT NULL
 );
+
+-- Tạo bảng lottery_jackpot_history
+CREATE TABLE lottery_jackpot_history (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    winning_number VARCHAR(2) NOT NULL,
+    draw_time DATETIME NOT NULL,
+    prize_pool INT NOT NULL
+);
