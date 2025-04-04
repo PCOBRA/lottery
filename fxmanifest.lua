@@ -3,7 +3,7 @@ game 'gta5'
 
 author 'Pin Cobra'
 description 'Xổ Số Theo Thời Gian Thực 60 phút'
-version '1.0.0'
+version '2.0.0'
 
 lua54 'yes'
 
