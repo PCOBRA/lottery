@@ -9,22 +9,24 @@ local function isAdmin(source)
     return xPlayer and xPlayer.getGroup() == "admin"
 end
 
--- Gửi thông báo Discord cho kết quả xổ số
-local function SendResultToDiscord(winningNumber, prizePool, winnerCount, drawTime, jackpot)
+-- Gửi thông báo Discord cho kết quả xổ số (bỏ timestamp)
+local function SendResultToDiscord(winningNumber, prizePool, winnerCount, drawTime, jackpot, secondWinners, thirdWinners, consolationWinners)
     if Config.ResultWebhookURL and Config.ResultWebhookURL ~= 'YOUR_DISCORD_WEBHOOK_URL_HERE' then
         local embed = {
             {
                 color = 65280,
                 title = "🎉 Kết Quả Xổ Số 🎉",
                 description = "Kỳ xổ số vừa kết thúc!",
-                thumbnail = {url = "https://media.discordapp.net/attachments/1259110783711842324/1344135691759779862/logo5.png?ex=67ed4b29&is=67ebf9a9&hm=18072fd5a833e4ca40990d73335cba51197fd26bb487845762f1a163f3d013b4&=&format=webp&quality=lossless&width=544&height=544"},
+                thumbnail = {url = "...."},
                 fields = {
                     {name = "Số trúng thưởng", value = "**" .. winningNumber .. "**", inline = true},
                     {name = "Tổng giải thưởng", value = "**" .. prizePool .. "$**", inline = true},
-                    {name = "Người trúng", value = "**" .. winnerCount .. "**", inline = true},
+                    {name = "Người trúng Jackpot", value = "**" .. winnerCount .. "**", inline = true},
+                    {name = "Giải nhì (30,000$/vé)", value = "**" .. secondWinners .. "**", inline = true},
+                    {name = "Giải ba (20,000$/vé)", value = "**" .. thirdWinners .. "**", inline = true},
+                    {name = "Giải khuyến khích (5,000$/vé)", value = "**" .. consolationWinners .. "**", inline = true},
                     {name = "Jackpot hiện tại", value = "**" .. jackpot .. "$**", inline = true}
                 },
-                timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
                 footer = {text = "Lottery Feinix City"}
             }
         }
@@ -32,7 +34,7 @@ local function SendResultToDiscord(winningNumber, prizePool, winnerCount, drawTi
     end
 end
 
--- Gửi thông báo Discord cho hành động người chơi
+-- Gửi thông báo Discord cho hành động người chơi (bỏ timestamp)
 local function SendPlayerActionToDiscord(playerName, playerId, action)
     if Config.PlayerActionWebhookURL and Config.PlayerActionWebhookURL ~= 'YOUR_DISCORD_WEBHOOK_URL_HERE' then
         local embed = {
@@ -43,7 +45,6 @@ local function SendPlayerActionToDiscord(playerName, playerId, action)
                 fields = {
                     {name = "Người chơi", value = "**" .. playerName .. "** (ID: " .. playerId .. ")", inline = true}
                 },
-                timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
                 footer = {text = "Admin Log - Simple Lottery"}
             }
         }
@@ -54,7 +55,6 @@ end
 -- Ghi log vào MySQL
 local function LogActivity(message)
     MySQL.insert('INSERT INTO lottery_logs (message, date) VALUES (?, NOW())', {message})
-    print("[Lottery Log] " .. message)
 end
 
 -- Lưu trạng thái vào MySQL
@@ -64,32 +64,40 @@ local function SaveState(drawTime)
     })
 end
 
+-- Lưu lịch sử jackpot
+local function SaveJackpotHistory(winningNumber, drawTime, prizePool)
+    MySQL.insert('INSERT INTO lottery_jackpot_history (winning_number, draw_time, prize_pool) VALUES (?, FROM_UNIXTIME(?), ?)', {
+        winningNumber, drawTime, prizePool
+    })
+    -- Xóa các bản ghi cũ nếu vượt quá 5
+    MySQL.query('DELETE FROM lottery_jackpot_history WHERE id NOT IN (SELECT id FROM (SELECT id FROM lottery_jackpot_history ORDER BY draw_time DESC LIMIT 5) AS temp)')
+end
+
 -- Tải trạng thái từ MySQL khi khởi động
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
-    local currentTime = os.time() -- Lấy thời gian thực từ VPS
-    local result = MySQL.single.await('SELECT last_draw_time, total_pool FROM lottery_state WHERE id = 1')
-    lastDrawTime = result and result.last_draw_time or currentTime
-    totalPool = result and result.total_pool or 0
-
-    -- Kiểm tra nếu lastDrawTime không hợp lệ (trong tương lai xa), reset về currentTime
-    if lastDrawTime > currentTime + 3600 then
+    local currentTime = os.time()
+    local result = MySQL.single.await('SELECT UNIX_TIMESTAMP(last_draw_time) as last_draw_time, total_pool FROM lottery_state WHERE id = 1')
+    if result then
+        lastDrawTime = result.last_draw_time and tonumber(result.last_draw_time) or currentTime
+        totalPool = result.total_pool and tonumber(result.total_pool) or 501320 -- Gán giá trị mặc định từ SQL
+        if not result.total_pool or result.total_pool == 0 then
+            totalPool = 501320
+            MySQL.query('UPDATE lottery_state SET total_pool = ? WHERE id = 1', {totalPool})
+        end
+    else
         lastDrawTime = currentTime
-        SaveState(lastDrawTime)
-        print("[Lottery] Reset lastDrawTime do giá trị không hợp lệ: " .. os.date("%d/%m/%Y - %H:%M:%S", lastDrawTime))
+        totalPool = 501320
+        MySQL.query('INSERT INTO lottery_state (id, last_draw_time, total_pool) VALUES (1, FROM_UNIXTIME(?), ?) ON DUPLICATE KEY UPDATE last_draw_time = FROM_UNIXTIME(?), total_pool = ?', {
+            currentTime, totalPool, currentTime, totalPool
+        })
     end
-
-    print("[Lottery] Initialized lastDrawTime: " .. os.date("%d/%m/%Y - %H:%M:%S", lastDrawTime) .. ", totalPool: " .. totalPool)
 end)
 
--- Gửi jackpot và thời gian quay số tiếp theo về client
+-- Gửi jackpot về client (bỏ thời gian quay số)
 RegisterNetEvent('lottery:getJackpot', function()
     local src = source
-    local currentTime = os.time()
-    local currentDate = os.date("*t", currentTime)
-    local nextDrawHour = currentDate.hour + 1 -- Lấy giờ tiếp theo
-    local nextDrawTime = string.format("%02d:%02d:%02d", nextDrawHour % 24, 0, 0) -- Đặt phút và giây về 00
-    TriggerClientEvent('lottery:receiveJackpot', src, totalPool, nextDrawTime)
+    TriggerClientEvent('lottery:receiveJackpot', src, totalPool)
 end)
 
 -- Mua vé số
@@ -98,10 +106,9 @@ RegisterNetEvent('lottery:buyTicket', function()
     local xPlayer = ESX.GetPlayerFromId(src)
     if not xPlayer then return end
 
-    local currentTime = os.time() -- Lấy thời gian thực từ VPS
+    local currentTime = os.time()
     local currentMinute = tonumber(os.date("%M", currentTime))
 
-    -- Khóa mua vé từ phút 50 trở đi
     if currentMinute >= 50 then
         TriggerClientEvent('lottery:buyLocked', src)
         return
@@ -140,7 +147,6 @@ RegisterNetEvent('lottery:buyTicket', function()
         })
         LogActivity("Người chơi " .. xPlayer.getName() .. " (ID: " .. src .. ") đã mua vé số: " .. formattedNumber)
         SendPlayerActionToDiscord(xPlayer.getName(), src, "Mua vé số: " .. formattedNumber)
-        -- Thông báo cho tất cả người chơi khi Jackpot tăng
         TriggerClientEvent('lottery:jackpotUpdated', -1, totalPool)
     else
         lib.notify(src, {
@@ -163,37 +169,43 @@ RegisterNetEvent('lottery:checkTickets', function()
     TriggerClientEvent('lottery:showTickets', src, tickets)
 end)
 
--- Kiểm tra thời gian thực và quay số khi phút = 00
+-- Lấy lịch sử jackpot (chỉ lấy winning_number và prize_pool)
+RegisterNetEvent('lottery:getJackpotHistory', function()
+    local src = source
+    local history = MySQL.query.await('SELECT winning_number, prize_pool FROM lottery_jackpot_history ORDER BY draw_time DESC LIMIT 5')
+    TriggerClientEvent('lottery:receiveJackpotHistory', src, history)
+end)
+
+-- Kiểm tra thời gian thực và quay số (giữ logic quay số nhưng không hiển thị thời gian)
 Citizen.CreateThread(function()
     local lastDrawHour = -1
-    local notifiedMinutes = {} -- Lưu trạng thái thông báo cho từng phút
+    local notifiedMinutes = {}
 
     while true do
-        Wait(100) -- Kiểm tra mỗi 100ms để chính xác hơn
-        local currentTime = os.time() -- Lấy thời gian thực từ VPS
+        Wait(100)
+        local currentTime = os.time()
         local currentDate = os.date("*t", currentTime)
         local currentHour = currentDate.hour
         local currentMinute = currentDate.min
         local currentSecond = currentDate.sec
 
-        -- Kiểm tra các mốc thông báo đếm ngược (50, 55, 57, 58, 59)
         local notifyMinute = nil
         local notifyMessage = nil
         if currentMinute == 50 then
             notifyMinute = 50
-            notifyMessage = "Xổ số sẽ diễn ra sau 10 phút!"
+            notifyMessage = "Xổ số sắp diễn ra!"
         elseif currentMinute == 55 then
             notifyMinute = 55
-            notifyMessage = "Còn 5 phút đến giờ quay số!"
+            notifyMessage = "Xổ số sắp diễn ra!"
         elseif currentMinute == 57 then
             notifyMinute = 57
-            notifyMessage = "Còn 3 phút đến giờ quay số!"
+            notifyMessage = "Xổ số sắp diễn ra!"
         elseif currentMinute == 58 then
             notifyMinute = 58
-            notifyMessage = "Còn 2 phút đến giờ quay số!"
+            notifyMessage = "Xổ số sắp diễn ra!"
         elseif currentMinute == 59 then
             notifyMinute = 59
-            notifyMessage = "Còn 1 phút đến giờ quay số!"
+            notifyMessage = "Xổ số sắp diễn ra!"
         end
 
         if notifyMinute and currentSecond == 0 and not notifiedMinutes[currentHour .. ":" .. notifyMinute] then
@@ -205,11 +217,10 @@ Citizen.CreateThread(function()
                 position = "center-left",
                 duration = Config.NotifyDuration
             })
-            LogActivity("Thông báo: " .. notifyMessage .. " lúc " .. os.date("%H:%M:%S", currentTime))
+            LogActivity("Thông báo: " .. notifyMessage)
             notifiedMinutes[currentHour .. ":" .. notifyMinute] = true
         end
 
-        -- Kiểm tra quay số lúc phút = 00, giây = 00
         if currentMinute == 0 and currentSecond == 0 and currentHour ~= lastDrawHour then
             local winningNumber = math.random(0, 99)
             local formattedNumber = string.format("%02d", winningNumber)
@@ -217,8 +228,7 @@ Citizen.CreateThread(function()
             lastDrawTime = currentTime
             lastDrawHour = currentHour
             SaveState(lastDrawTime)
-            LogActivity("Quay số kết quả: " .. formattedNumber .. " - Tổng giải thưởng: " .. totalPool .. "$ lúc " .. os.date("%H:%M:%S", currentTime))
-            -- Reset trạng thái thông báo cho giờ mới
+            LogActivity("Quay số kết quả: " .. formattedNumber .. " - Tổng giải thưởng: " .. totalPool .. "$")
             notifiedMinutes = {}
         end
     end
@@ -227,15 +237,36 @@ end)
 -- Quay số và chia thưởng
 function DrawLottery(winningNumber, drawTime)
     local tickets = MySQL.query.await('SELECT identifier, number FROM lottery_tickets')
-    local winners = {}
+    local winners = {} -- Giải jackpot
+    local secondPrizeWinners = {} -- Giải nhì
+    local thirdPrizeWinners = {} -- Giải ba
+    local consolationWinners = {} -- Giải khuyến khích
     local ticketCount = 0
+
+    local winningNumInt = tonumber(winningNumber)
+    local unitDigit = winningNumInt % 10
+    local tensDigit = math.floor(winningNumInt / 10)
+    local prevNum = string.format("%02d", (winningNumInt - 1) % 100)
+    local nextNum = string.format("%02d", (winningNumInt + 1) % 100)
+
     for _, ticket in ipairs(tickets) do
         ticketCount = ticketCount + 1
+        local ticketNumInt = tonumber(ticket.number)
+        local ticketUnitDigit = ticketNumInt % 10
+        local ticketTensDigit = math.floor(ticketNumInt / 10)
+
         if ticket.number == winningNumber then
             local xPlayer = ESX.GetPlayerFromIdentifier(ticket.identifier)
-            if xPlayer then
-                winners[#winners + 1] = xPlayer.source
-            end
+            if xPlayer then winners[#winners + 1] = xPlayer.source end
+        elseif ticketUnitDigit == unitDigit then
+            local xPlayer = ESX.GetPlayerFromIdentifier(ticket.identifier)
+            if xPlayer then secondPrizeWinners[#secondPrizeWinners + 1] = xPlayer.source end
+        elseif ticketTensDigit == tensDigit then
+            local xPlayer = ESX.GetPlayerFromIdentifier(ticket.identifier)
+            if xPlayer then thirdPrizeWinners[#thirdPrizeWinners + 1] = xPlayer.source end
+        elseif ticket.number == prevNum or ticket.number == nextNum then
+            local xPlayer = ESX.GetPlayerFromIdentifier(ticket.identifier)
+            if xPlayer then consolationWinners[#consolationWinners + 1] = xPlayer.source end
         end
     end
 
@@ -243,35 +274,73 @@ function DrawLottery(winningNumber, drawTime)
     totalPool = 0
     MySQL.query('TRUNCATE TABLE lottery_tickets')
 
+    -- Giải jackpot
     if #winners > 0 then
         local prizePerWinner = math.floor(prizePool / #winners)
         local taxedPrize = math.floor(prizePerWinner * (1 - Config.TaxRate))
-
         for _, winnerSrc in ipairs(winners) do
             local xPlayer = ESX.GetPlayerFromId(winnerSrc)
             if xPlayer then
                 xPlayer.addAccountMoney('bank', taxedPrize)
-                TriggerClientEvent('lottery:winPrize', winnerSrc, taxedPrize)
-                LogActivity("Người chơi " .. xPlayer.getName() .. " (ID: " .. winnerSrc .. ") trúng thưởng: " .. taxedPrize .. "$ (số: " .. winningNumber .. ")")
-                SendPlayerActionToDiscord(xPlayer.getName(), winnerSrc, "Trúng thưởng " .. taxedPrize .. "$ (Số: " .. winningNumber .. ")")
+                TriggerClientEvent('lottery:winPrize', winnerSrc, taxedPrize, "Jackpot")
+                LogActivity("Người chơi " .. xPlayer.getName() .. " (ID: " .. winnerSrc .. ") trúng Jackpot: " .. taxedPrize .. "$ (số: " .. winningNumber .. ")")
+                SendPlayerActionToDiscord(xPlayer.getName(), winnerSrc, "Trúng Jackpot " .. taxedPrize .. "$ (Số: " .. winningNumber .. ")")
             end
         end
     else
         totalPool = math.floor(prizePool * Config.JackpotCarryover)
     end
 
-    TriggerClientEvent('lottery:drawResult', -1, winningNumber, prizePool)
-    SendResultToDiscord(winningNumber, prizePool, #winners, drawTime, totalPool)
+    -- Giải nhì (30,000$/vé)
+    local secondPrize = 30000
+    for _, winnerSrc in ipairs(secondPrizeWinners) do
+        local xPlayer = ESX.GetPlayerFromId(winnerSrc)
+        if xPlayer then
+            xPlayer.addAccountMoney('bank', secondPrize)
+            TriggerClientEvent('lottery:winPrize', winnerSrc, secondPrize, "Giải nhì")
+            LogActivity("Người chơi " .. xPlayer.getName() .. " (ID: " .. winnerSrc .. ") trúng Giải nhì: " .. secondPrize .. "$ (số: " .. winningNumber .. ")")
+            SendPlayerActionToDiscord(xPlayer.getName(), winnerSrc, "Trúng Giải nhì " .. secondPrize .. "$ (Số: " .. winningNumber .. ")")
+        end
+    end
+
+    -- Giải ba (20,000$/vé)
+    local thirdPrize = 20000
+    for _, winnerSrc in ipairs(thirdPrizeWinners) do
+        local xPlayer = ESX.GetPlayerFromId(winnerSrc)
+        if xPlayer then
+            xPlayer.addAccountMoney('bank', thirdPrize)
+            TriggerClientEvent('lottery:winPrize', winnerSrc, thirdPrize, "Giải ba")
+            LogActivity("Người chơi " .. xPlayer.getName() .. " (ID: " .. winnerSrc .. ") trúng Giải ba: " .. thirdPrize .. "$ (số: " .. winningNumber .. ")")
+            SendPlayerActionToDiscord(xPlayer.getName(), winnerSrc, "Trúng Giải ba " .. thirdPrize .. "$ (Số: " .. winningNumber .. ")")
+        end
+    end
+
+    -- Giải khuyến khích (5,000$/vé)
+    local consolationPrize = 5000
+    for _, winnerSrc in ipairs(consolationWinners) do
+        local xPlayer = ESX.GetPlayerFromId(winnerSrc)
+        if xPlayer then
+            xPlayer.addAccountMoney('bank', consolationPrize)
+            TriggerClientEvent('lottery:winPrize', winnerSrc, consolationPrize, "Giải khuyến khích")
+            LogActivity("Người chơi " .. xPlayer.getName() .. " (ID: " .. winnerSrc .. ") trúng Giải khuyến khích: " .. consolationPrize .. "$ (số: " .. winningNumber .. ")")
+            SendPlayerActionToDiscord(xPlayer.getName(), winnerSrc, "Trúng Giải khuyến khích " .. consolationPrize .. "$ (Số: " .. winningNumber .. ")")
+        end
+    end
+
+    -- Lưu lịch sử jackpot
+    SaveJackpotHistory(winningNumber, drawTime, prizePool)
+
+    -- Gửi kết quả quay số
+    TriggerClientEvent('lottery:drawResult', -1, winningNumber, prizePool, #winners, #secondPrizeWinners, #thirdPrizeWinners, #consolationWinners)
+    SendResultToDiscord(winningNumber, prizePool, #winners, drawTime, totalPool, #secondPrizeWinners, #thirdPrizeWinners, #consolationWinners)
 end
 
--- Lệnh admin để quay số thử nghiệm
+-- Lệnh admin quay số thử nghiệm
 RegisterCommand('lottery_draw_test', function(source, args)
     if source == 0 or isAdmin(source) then
         local currentTime = os.time()
-        local currentDate = os.date("*t", currentTime)
-        local currentHour = currentDate.hour
         local timeSinceLastDraw = lastDrawTime == 0 and math.huge or (currentTime - lastDrawTime)
-        if timeSinceLastDraw >= 3600 then -- 1 giờ
+        if timeSinceLastDraw >= 3600 then
             local winningNumber = math.random(0, 99)
             local formattedNumber = string.format("%02d", winningNumber)
             DrawLottery(formattedNumber, currentTime)
@@ -285,8 +354,6 @@ RegisterCommand('lottery_draw_test', function(source, args)
                     position = "center-left",
                     duration = Config.NotifyDuration
                 })
-            else
-                print("Đã quay số thử nghiệm từ console: " .. formattedNumber)
             end
         else
             local timeRemaining = 3600 - (timeSinceLastDraw % 3600)
@@ -298,8 +365,6 @@ RegisterCommand('lottery_draw_test', function(source, args)
                     position = "center-left",
                     duration = Config.NotifyDuration
                 })
-            else
-                print("Chưa đủ 60 phút! Còn " .. math.floor(timeRemaining / 60) .. " phút.")
             end
         end
     else
@@ -330,8 +395,6 @@ RegisterCommand('lottery_draw', function(source, args)
                 position = "center-left",
                 duration = Config.NotifyDuration
             })
-        else
-            print("Đã quay số thủ công từ console: " .. formattedNumber)
         end
     else
         lib.notify(source, {
