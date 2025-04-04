@@ -4,7 +4,7 @@ Config = {}
 Config.TicketPrice = 20000 -- 20,000$ mỗi vé
 
 -- Giới hạn số vé mỗi người
-Config.MaxTicketsPerPlayer = 2
+Config.MaxTicketsPerPlayer = 2 ----
 
 -- Vị trí NPC bán vé
 Config.TicketSeller = {
@@ -20,7 +20,7 @@ Config.BonusPerTicket = 20000 -- 20,000$ cộng thêm cho mỗi vé bán ra
 Config.NotifyDuration = 10000 -- 10 giây
 
 -- Webhook Discord để thông báo kết quả
-Config.ResultWebhookURL = 'https://discord.com/api/webhooks/1356784846415986798/rHWgdLm5LrhTQv_d54mkto57w6SJXP8-NC3P60awNtP5GdeLyn1t_Rv9fwvc3h0z9j27'
+Config.ResultWebhookURL = 'YOUR_DISCORD_WEBHOOK_URL_HERE'
 
 -- Webhook Discord để thông báo hành động người chơi
-Config.PlayerActionWebhookURL = 'https://discord.com/api/webhooks/1356781692219818196/EO4uL8citceL8ORuR58co8Bne5fM_ZitipldccP7ZHoK7jeq1hTMHCM3x29sRZga4K_D'
+Config.PlayerActionWebhookURL = 'YOUR_DISCORD_WEBHOOK_URL_HERE'
